@@ -4,9 +4,9 @@ import time
 import datetime
 import pytz
 import wordpress_xmlrpc
-from wordpress_xmlrpc.methods import posts
+from wordpress_xmlrpc.methods import posts, comments
 
-DEFAULT_TEXT_DIRECTION = 'ltr'
+DEFAULT_TEXT_DIRECTION = 'rtl'
 GROUP_TIMEZONE = pytz.timezone('Asia/Jerusalem')
 
 
@@ -30,7 +30,7 @@ def format_message(text):
     divs = []
     for line in lines:
         if len(line.strip()) == 0:
-            divs.append('<div></div>')
+            divs.append('')
         else:
             line_bidi = unicodedata.bidirectional(line.strip()[0])
             if line_bidi == 'L':
@@ -38,7 +38,7 @@ def format_message(text):
             elif line_bidi == 'R':
                 direction = 'rtl'
             divs.append(div_with_direction(line, direction))
-    return '<br />\n'.join(divs)
+    return '&nbsp;\n'.join(divs)
 
 
 def facebook_timestamp_to_datetime(timestamp):
@@ -62,11 +62,14 @@ def extract_title(message):
 
 class WordPressAdapter(object):
 
-    def __init__(self, blog_name, username, password):
+    def __init__(self, blog_name, username, password, debug=False):
         rpc_url = 'https://{}.wordpress.com/xmlrpc.php'.format(blog_name)
         self._client = wordpress_xmlrpc.Client(rpc_url, username, password)
+        self._debug = debug
 
     def post_from_fb(self, fb_dict):
+        # TODO: upload images and attachments to wordpress
+        # TODO: also handle attachments
         post = wordpress_xmlrpc.WordPressPost()
         post.title = extract_title(fb_dict['message'])
         post.content = format_message(fb_dict['message'])
@@ -79,4 +82,32 @@ class WordPressAdapter(object):
             post.date_modified = facebook_timestamp_to_datetime(fb_dict['updated_time'])
         post.terms_names = {'post_tag': [fb_dict['from']['name']]}
         post.post_status = 'publish'
-        self._client.call(posts.NewPost(post))
+        post.comment_status = 'open'
+        if self._debug:
+            print('posting')
+        post_id = self._client.call(posts.NewPost(post))
+        self.add_comments(post_id, post_id, fb_dict['comments'])
+
+    def add_comments(self, post_id, parent, fb_comments):
+        for fb_dict in fb_comments:
+            comment = wordpress_xmlrpc.WordPressComment()
+            comment.post = post_id
+            comment.parent = parent
+            comment.date_created = facebook_timestamp_to_datetime(fb_dict['created_time'])
+            comment.status = 'approve'
+            comment.author = fb_dict['from']['name']
+            comment.author_url = ''
+            comment.author_email = ''
+            comment.author_ip = '10.0.0.0'
+            comment.content = format_message(fb_dict['message'])
+            if 'attachment' in fb_dict:
+                if self._debug:
+                    print('image {}'.format(fb_dict['attachment']))
+                comment.content += '\n<br /><img src={}" \>'.format(fb_dict['attachment'])
+            if self._debug:
+                if parent == post_id:
+                    print('comment')
+                else:
+                    print('- comment')
+            comment_id = self._client.call(comments.NewComment(post_id, comment))
+            self.add_comments(post_id, comment_id, fb_dict['comments'])

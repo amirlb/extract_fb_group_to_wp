@@ -152,6 +152,8 @@ class FacebookAPI(object):
                     del comment['attachment']
             if comment['comment_count'] > 0:
                 comment['comments'] = list(self.get_comments(comment['id'], dl_resources))
+            else:
+                comment['comments'] = []
             yield comment
 
 
