@@ -91,7 +91,8 @@ class FacebookAPI(object):
     def get_posts_from_group(self, obj_id, dl_resources=False):
         # TODO: give an option to limit by time
         fields = ['id',  # post object identifier
-                  'from', 'message',  # author and content of the message
+                  'type',  # what kind of post this is
+                  'from', 'message',  # author and content of the post
                   'link',  # if the author created a link post and deleted the original link
                   'created_time', 'updated_time',  # first & last edit
                   'attachments'  # photos, file uploads, albums, etc
@@ -113,9 +114,10 @@ class FacebookAPI(object):
         if 'message' not in post:
             post['message'] = ''
         if 'link' in post:
-            if post['link'] not in post['message']:
+            if post['type'] == 'link' and post['link'] not in post['message']:
                 post['message'] = '{}\n\n{}'.format(post['link'], post['message'])
             del post['link']
+        del post['type']
 
         attachment_list = list(FacebookAPI._parse_attachments(post.get('attachments')))
         post['pictures'] = []
@@ -134,17 +136,6 @@ class FacebookAPI(object):
 
         return post
 
-    # def get_feed(self, obj):
-    #     return ResultList(self._get([obj, 'feed']))
-    #
-    # def get_attachments(self, obj):
-    #     attachments = []
-    #     for item in ResultList(self._get([obj, 'attachments'])):
-    #         attachments.append(item)
-    #         if 'subattachments' in item:
-    #             attachments.extend(ResultList(item['subattachments']))
-    #     return attachments
-
     def get_comments(self, obj_id, dl_resources=False):
         fields = ['id', 'from', 'message', 'created_time', 'updated_time',
                   'attachment',  # picture or shared link
@@ -162,35 +153,6 @@ class FacebookAPI(object):
             if comment['comment_count'] > 0:
                 comment['comments'] = list(self.get_comments(comment['id'], dl_resources))
             yield comment
-
-    # def get_post(self, obj, dl_resources=False):
-    #     fields = ['from', 'message',  # author and content of the message
-    #               'link',  # if the author created a link post and deleted the original link
-    #               'created_time', 'updated_time',  # first & last edit
-    #               'attachments'  # photos, file uploads, albums, etc
-    #               ]
-    #     post = self._get([obj], {'fields': ','.join(fields)})
-    #
-    #     if 'message' not in post:
-    #         post['message'] = ''
-    #     if 'link' in post:
-    #         if post['link'] not in post['message']:
-    #             post['message'] = '{}\n\n{}'.format(post['link'], post['message'])
-    #         del post['link']
-    #
-    #     post['pictures'] = []
-    #     post['attachments'] = []
-    #     for attachment in self.get_attachments():
-    #         if attachment['type'] == 'photo':
-    #             post['pictures'].append(attachment['media']['image']['src'])
-    #         elif attachment['type'] == 'file_upload':
-    #             post['attachments'].append((attachment['title'], attachment['url']))
-    #
-    #     if dl_resources:
-    #         post['pictures'] = [download(url) for url in post['pictures']]
-    #         post['attachments'] = [(title, download(url)) for (title, url) in post['attachments']]
-    #
-    #     return post
 
 
 class ResultList(object):
