@@ -1,0 +1,40 @@
+
+### DOWNLOAD ALL GROUP POSTS INTO SUBDIRECTORY
+
+from facebook_api import *
+import pickle
+import os
+
+token = 'EA...ZDZD'
+token = open('access_token.txt').read()
+
+group_name = 'חפירות על מתמטיקה'
+
+api = FacebookAPI(token, 'v2.6')
+math_discussions = api.search(group_name, 'group').__next__()['id']
+
+for post in api.get_posts_from_group(math_discussions):
+    post.save_into('posts')
+    post.fetch_comments(api)
+    print(post._updated_time)
+
+
+### UPLOAD ALL POSTS INTO A WORDPRESS BLOG
+
+import wordpress_adapter
+from glob import glob
+import pickle
+import os
+
+blog_address = 'https://mathematicaldeliberations.wordpress.com/'
+blog_admin_username = 'admin'
+blog_admin_password = '...'
+
+adapter = wordpress_adapter.WordPressAdapter(blog_address, blog_admin_username, blog_admin_password, debug=True)
+ordered_post_dirs = sorted(glob('posts/*'), key=lambda x: int(x.split('_')[1]))
+posts = [pickle.load(open(os.path.join(d, 'post.pickle'), 'rb')) for d in ordered_post_dirs]
+
+for post in posts[::-1]:
+    if post['message']:
+        print(post['updated_time'])
+        adapter.post_from_fb(post, True)
