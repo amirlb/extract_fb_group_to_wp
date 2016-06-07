@@ -91,8 +91,7 @@ class FacebookAPI(object):
         """
         return ResultList(self._get(['search'], {'q': query, 'type': typ, 'fields': 'id,name'}))
 
-    def get_posts_from_group(self, group_id):
-        # TODO: give an option to limit by time
+    def get_posts_from_group(self, group_id, since=None, until=None):
         fields = ['id',  # post object identifier
                   'type',  # what kind of post this is
                   'from', 'message',  # author and content of the post
@@ -100,7 +99,28 @@ class FacebookAPI(object):
                   'created_time', 'updated_time',  # first & last edit
                   'attachments'  # photos, file uploads, albums, etc
                   ]
-        feed = self._get([group_id, 'feed'], {'fields': ','.join(fields)})
+        params = {'fields': ','.join(fields)}
+        if since is not None:
+            params['since'] = since
+        if until is not None:
+            params['until'] = until
+        feed = self._get([group_id, 'feed'], params)
+        return (PostRef(res) for res in ResultList(feed))
+
+    def get_posts_from_group_few_fields(self, group_id, since=None, until=None):
+        """
+        Use for before november 2013 (gets an "unknown error" when asking for all the fields)
+        """
+        fields = ['id',  # post object identifier
+                  'from', 'message',  # author and content of the post
+                  'created_time', 'updated_time'  # first & last edit
+                  ]
+        params = {'fields': ','.join(fields)}
+        if since is not None:
+            params['since'] = since
+        if until is not None:
+            params['until'] = until
+        feed = self._get([group_id, 'feed'], params)
         return (PostRef(res) for res in ResultList(feed))
 
     @staticmethod
@@ -143,7 +163,7 @@ class PostRef(object):
         self._updated_time = fb_dict['updated_time']
 
         self._message = fb_dict.get('message', '')
-        if fb_dict['type'] == 'link':
+        if fb_dict.get('type') == 'link':
             if 'link' in fb_dict and fb_dict['link'] not in self._message:
                 # user typed a link and then deleted it
                 self._message = fb_dict['link'] + '\n\n' + self._message
