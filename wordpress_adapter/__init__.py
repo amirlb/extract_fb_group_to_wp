@@ -93,7 +93,7 @@ class WordPressAdapter(object):
                 fb_dict['attachments'] = [(name, self.upload(f)) for name, f in fb_dict['attachments']]
             attachments = ''.join('<div><a href="{}">{}</a></div>\n'.format(url, name)
                                   for name, url in fb_dict['attachments'])
-            post.content += '<br />\n<div>Attachments:</div>\n' + attachments
+            post.content += '<br />\n<div>קבצים מצורפים:</div>\n' + attachments
         post.date = facebook_timestamp_to_datetime(fb_dict['created_time'])
         if fb_dict['updated_time'] != fb_dict['created_time']:
             post.date_modified = facebook_timestamp_to_datetime(fb_dict['updated_time'])
@@ -108,28 +108,29 @@ class WordPressAdapter(object):
     def add_comments(self, post_id, parent, fb_comments, ul_resources=False):
         for fb_dict in fb_comments:
             comment = wordpress_xmlrpc.WordPressComment()
-            comment.post = post_id
             comment.parent = parent
             comment.date_created = facebook_timestamp_to_datetime(fb_dict['created_time'])
             comment.status = 'approve'
-            comment.author = fb_dict['from']['name']
-            comment.author_url = ''
-            comment.author_email = ''
-            comment.author_ip = '10.0.0.0'
-            comment.content = format_message(fb_dict['message'])
+            comment.content = fb_dict['message']
             if 'attachment' in fb_dict:
                 if ul_resources:
                     fb_dict['attachment'] = self.upload(fb_dict['attachment'])
                 if self._debug:
                     print('image {}'.format(fb_dict['attachment']))
-                comment.content += '\n<br /><img src="{}" />'.format(fb_dict['attachment'])
+                comment.content += '\n\n{}'.format(fb_dict['attachment'])
             if self._debug:
                 if parent == post_id:
                     print('comment')
                 else:
                     print('- comment')
             try:
+                # save comment
                 comment_id = self._client.call(comments.NewComment(post_id, comment))
+                # rename author (has to be done separately)
+                rec = wordpress_xmlrpc.WordPressComment()
+                rec.author = fb_dict['from']['name']
+                self._client.call(comments.EditComment(comment_id, rec))
+                # handle replies
                 self.add_comments(post_id, comment_id, fb_dict['comments'], ul_resources)
             except xmlrpc_client.Fault as e:
                 if e.faultCode == 409:
