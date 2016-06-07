@@ -1,9 +1,9 @@
 import json
 import os
+import pickle
 import random
 from urllib.parse import urlencode, urlparse
 from urllib.request import urlretrieve
-
 import requests
 
 
@@ -54,6 +54,7 @@ def download(url, subdir):
     # munge filename for uniqueness
     file_name = urlparse(url).path.split('/')[-1]
     file_name_parts = file_name.split('.')
+    file_name_parts[0] = file_name_parts[0][:100]  # cut very long file names
     file_name_parts[0] += '_{:08x}'.format(random.randrange(2 ** 32))
     file_name = '.'.join(file_name_parts)
     file_name = os.path.join(subdir, file_name)
@@ -90,7 +91,7 @@ class FacebookAPI(object):
         """
         return ResultList(self._get(['search'], {'q': query, 'type': typ, 'fields': 'id,name'}))
 
-    def get_posts_from_group(self, obj_id, dl_resources=False):
+    def get_posts_from_group(self, group_id):
         # TODO: give an option to limit by time
         fields = ['id',  # post object identifier
                   'type',  # what kind of post this is
@@ -99,48 +100,17 @@ class FacebookAPI(object):
                   'created_time', 'updated_time',  # first & last edit
                   'attachments'  # photos, file uploads, albums, etc
                   ]
-        feed = self._get([obj_id, 'feed'], {'fields': ','.join(fields)})
-        resources_subdir = None
-        for post in ResultList(feed):
-            if dl_resources:
-                resources_subdir = post['id']
-                os.mkdir(resources_subdir)
-            yield self.handle_post(post, resources_subdir)
+        feed = self._get([group_id, 'feed'], {'fields': ','.join(fields)})
+        return (PostRef(res) for res in ResultList(feed))
 
     @staticmethod
-    def _parse_attachments(attachments):
+    def parse_attachments(attachments):
         if attachments is not None:
             for item in ResultList(attachments):
                 yield item
                 if 'subattachments' in item:
                     for subitem in ResultList(item['subattachments']):
                         yield subitem
-
-    def handle_post(self, post, resources_subdir=None):
-        if 'message' not in post:
-            post['message'] = ''
-        if 'link' in post:
-            if post['type'] == 'link' and post['link'] not in post['message']:
-                post['message'] = '{}\n\n{}'.format(post['link'], post['message'])
-            del post['link']
-        del post['type']
-
-        attachment_list = list(FacebookAPI._parse_attachments(post.get('attachments')))
-        post['pictures'] = []
-        post['attachments'] = []
-        for attachment in attachment_list:
-            if attachment['type'] == 'photo':
-                post['pictures'].append(attachment['media']['image']['src'])
-            elif attachment['type'] == 'file_upload':
-                post['attachments'].append((attachment['title'], attachment['url']))
-
-        if resources_subdir:
-            post['pictures'] = [download(url, resources_subdir) for url in post['pictures']]
-            post['attachments'] = [(title, download(url, resources_subdir)) for (title, url) in post['attachments']]
-
-        post['comments'] = list(self.get_comments(post['id'], resources_subdir))
-
-        return post
 
     def get_comments(self, obj_id, resources_subdir=None):
         fields = ['id', 'from', 'message', 'created_time', 'updated_time',
@@ -161,6 +131,62 @@ class FacebookAPI(object):
             else:
                 comment['comments'] = []
             yield comment
+
+
+class PostRef(object):
+
+    def __init__(self, fb_dict):
+
+        self._fbid = fb_dict['id']
+        self._from = fb_dict['from']
+        self._created_time = fb_dict['created_time']
+        self._updated_time = fb_dict['updated_time']
+
+        self._message = fb_dict.get('message', '')
+        if fb_dict['type'] == 'link':
+            if 'link' in fb_dict and fb_dict['link'] not in self._message:
+                # user typed a link and then deleted it
+                self._message = fb_dict['link'] + '\n\n' + self._message
+
+        self._pictures = []  # array of urls / file names
+        self._attachments = []  # array of (title, url/filename)s
+
+        for attachment in FacebookAPI.parse_attachments(fb_dict.get('attachments')):
+            if attachment['type'] == 'photo':
+                self._pictures.append(attachment['media']['image']['src'])
+            elif attachment['type'] == 'file_upload':
+                self._attachments.append((attachment['title'], attachment['url']))
+
+        self._comments = None
+        self._resources_dir = None
+
+    def is_empty(self):
+        return bool(self._message)
+
+    def to_dict(self):
+        return {'id': self._fbid,
+                'from': self._from,
+                'created_time': self._created_time,
+                'updated_time': self._updated_time,
+                'message': self._message,
+                'pictures': self._pictures,
+                'attachments': self._attachments,
+                'comments': self._comments}
+
+    def _pickle(self):
+        pickle.dump(self.to_dict(), open(os.path.join(self._resources_dir, 'post.pickle'), 'wb'))
+
+    def save_into(self, resources_subdir):
+        self._resources_dir = os.path.join(resources_subdir, self._fbid)
+        os.mkdir(self._resources_dir)
+        self._pictures = [download(url, self._resources_dir) for url in self._pictures]
+        self._attachments = [(title, download(url, self._resources_dir)) for (title, url) in self._attachments]
+        self._pickle()
+
+    def fetch_comments(self, api):
+        self._comments = list(api.get_comments(self._fbid, self._resources_dir))
+        if self._resources_dir:
+            self._pickle()
 
 
 class ResultList(object):
