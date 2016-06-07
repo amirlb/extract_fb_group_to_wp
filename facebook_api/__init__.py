@@ -1,4 +1,5 @@
 import json
+import os
 import random
 from urllib.parse import urlencode, urlparse
 from urllib.request import urlretrieve
@@ -46,7 +47,7 @@ class GraphProtocol(object):
 
 
 # noinspection SpellCheckingInspection
-def download(url):
+def download(url, subdir):
     """
     Download the file in the URL specified, and return local filename
     """
@@ -55,6 +56,7 @@ def download(url):
     file_name_parts = file_name.split('.')
     file_name_parts[0] += '_{:08x}'.format(random.randrange(2 ** 32))
     file_name = '.'.join(file_name_parts)
+    file_name = os.path.join(subdir, file_name)
     # download
     urlretrieve(url, file_name)
     return file_name
@@ -98,8 +100,12 @@ class FacebookAPI(object):
                   'attachments'  # photos, file uploads, albums, etc
                   ]
         feed = self._get([obj_id, 'feed'], {'fields': ','.join(fields)})
+        resources_subdir = None
         for post in ResultList(feed):
-            yield self.handle_post(post, dl_resources)
+            if dl_resources:
+                resources_subdir = post['id']
+                os.mkdir(resources_subdir)
+            yield self.handle_post(post, resources_subdir)
 
     @staticmethod
     def _parse_attachments(attachments):
@@ -110,7 +116,7 @@ class FacebookAPI(object):
                     for subitem in ResultList(item['subattachments']):
                         yield subitem
 
-    def handle_post(self, post, dl_resources):
+    def handle_post(self, post, resources_subdir=None):
         if 'message' not in post:
             post['message'] = ''
         if 'link' in post:
@@ -128,15 +134,15 @@ class FacebookAPI(object):
             elif attachment['type'] == 'file_upload':
                 post['attachments'].append((attachment['title'], attachment['url']))
 
-        if dl_resources:
-            post['pictures'] = [download(url) for url in post['pictures']]
-            post['attachments'] = [(title, download(url)) for (title, url) in post['attachments']]
+        if resources_subdir:
+            post['pictures'] = [download(url, resources_subdir) for url in post['pictures']]
+            post['attachments'] = [(title, download(url, resources_subdir)) for (title, url) in post['attachments']]
 
-        post['comments'] = list(self.get_comments(post['id'], dl_resources))
+        post['comments'] = list(self.get_comments(post['id'], resources_subdir))
 
         return post
 
-    def get_comments(self, obj_id, dl_resources=False):
+    def get_comments(self, obj_id, resources_subdir=None):
         fields = ['id', 'from', 'message', 'created_time', 'updated_time',
                   'attachment',  # picture or shared link
                   'comment_count'  # number of sub-comments
@@ -146,12 +152,12 @@ class FacebookAPI(object):
             if 'attachment' in comment:
                 if comment['attachment']['type'] == 'photo':
                     comment['attachment'] = comment['attachment']['media']['image']['src']
-                    if dl_resources:
-                        comment['attachment'] = download(comment['attachment'])
+                    if resources_subdir:
+                        comment['attachment'] = download(comment['attachment'], resources_subdir)
                 else:
                     del comment['attachment']
             if comment['comment_count'] > 0:
-                comment['comments'] = list(self.get_comments(comment['id'], dl_resources))
+                comment['comments'] = list(self.get_comments(comment['id'], resources_subdir))
             else:
                 comment['comments'] = []
             yield comment
