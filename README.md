@@ -29,4 +29,5 @@ for post in PostRef.load_posts_sorted_by_id('posts')[::-1]:
     if not post.is_empty():
         print(post._updated_time)
         adapter.add_post(post, True)
+adapter.update_authors_page()
 ```

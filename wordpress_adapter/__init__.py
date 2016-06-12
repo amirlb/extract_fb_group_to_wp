@@ -3,6 +3,8 @@ import mimetypes
 import unicodedata
 import time
 import datetime
+
+import itertools
 import pytz
 import wordpress_xmlrpc
 from wordpress_xmlrpc import xmlrpc_client
@@ -139,3 +141,25 @@ class WordPressAdapter(object):
                     pass
                 else:
                     raise
+
+    def update_authors_page(self):
+        pages = self._client.call(posts.GetPosts({'post_type': 'page'}, results_class=wordpress_xmlrpc.WordPressPage))
+        authors_page = [page for page in pages if page.title == 'Authors'][0].id
+        authors_count = {}
+        for i in itertools.count(0, 10):
+            some_posts = self._client.call(posts.GetPosts({'number': 10, 'offset': i}))
+            if len(some_posts) == 0:
+                break  # no more posts returned
+            for post in some_posts:
+                for term in post.terms:
+                    if term.taxonomy == 'post_tag':
+                        author = term.name
+                        authors_count[author] = authors_count.get(author, 0) + 1
+        links = ['<a href="https://mathematicaldeliberations.wordpress.com/tag/{}/">{} - {} posts</a>'.format(name.lower().replace(' ', '-'), name, count)
+                 for name, count in authors_count.items()]
+        rec = wordpress_xmlrpc.WordPressPage()
+        rec.title = 'Authors'
+        rec.content = '<div style="direction: ltr; text-align: left;"><ul>\n' + \
+            '\n'.join(['<li style="text-align: left;">{}</li>'.format(link) for link in links]) + \
+            '\n</ul></div>'
+        self._client.call(posts.EditPost(authors_page, rec))
