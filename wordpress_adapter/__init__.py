@@ -79,31 +79,31 @@ class WordPressAdapter(object):
         result = self._client.call(media.UploadFile(data))
         return result['url']
 
-    def post_from_fb(self, fb_dict, ul_resources=False):
-        post = wordpress_xmlrpc.WordPressPost()
-        post.title = extract_title(fb_dict['message'])
-        post.content = format_message(fb_dict['message'])
-        if fb_dict['pictures']:
+    def add_post(self, post, ul_resources=False):
+        rec = wordpress_xmlrpc.WordPressPost()
+        rec.title = extract_title(post._message)
+        rec.content = format_message(post._message)
+        if post._pictures:
             if ul_resources:
-                fb_dict['pictures'] = [self.upload(f) for f in fb_dict['pictures']]
-            images = ''.join('<img src="{}" />\n'.format(url) for url in fb_dict['pictures'])
-            post.content = images + '<br />\n' + post.content
-        if fb_dict['attachments']:
+                post._pictures = [self.upload(f) for f in post._pictures]
+            images = ''.join('<img src="{}" />\n'.format(url) for url in post._pictures)
+            rec.content = images + '<br />\n' + rec.content
+        if post._attachments:
             if ul_resources:
-                fb_dict['attachments'] = [(name, self.upload(f)) for name, f in fb_dict['attachments']]
+                post._attachments = [(name, self.upload(f)) for name, f in post._attachments]
             attachments = ''.join('<div><a href="{}">{}</a></div>\n'.format(url, name)
-                                  for name, url in fb_dict['attachments'])
-            post.content += '<br />\n<div>קבצים מצורפים:</div>\n' + attachments
-        post.date = facebook_timestamp_to_datetime(fb_dict['created_time'])
-        if fb_dict['updated_time'] != fb_dict['created_time']:
-            post.date_modified = facebook_timestamp_to_datetime(fb_dict['updated_time'])
-        post.terms_names = {'post_tag': [fb_dict['from']['name']]}
-        post.post_status = 'publish'
-        post.comment_status = 'open'
+                                  for name, url in post._attachments)
+            rec.content += '<br />\n<div>קבצים מצורפים:</div>\n' + attachments
+        rec.date = facebook_timestamp_to_datetime(post._created_time)
+        if post._updated_time != post._created_time:
+            rec.date_modified = facebook_timestamp_to_datetime(post._updated_time)
+        rec.terms_names = {'post_tag': [post._from['name']]}
+        rec.post_status = 'publish'
+        rec.comment_status = 'open'
         if self._debug:
             print('posting')
-        post_id = self._client.call(posts.NewPost(post))
-        self.add_comments(post_id, post_id, fb_dict['comments'], ul_resources)
+        post_id = self._client.call(posts.NewPost(rec))
+        self.add_comments(post_id, post_id, post._comments, ul_resources)
 
     def add_comments(self, post_id, parent, fb_comments, ul_resources=False):
         for fb_dict in fb_comments:

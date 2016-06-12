@@ -2,9 +2,27 @@ import json
 import os
 import pickle
 import random
-from urllib.parse import urlencode, urlparse
-from urllib.request import urlretrieve
+import urllib.parse
+import urllib.request
 import requests
+
+
+def download(url, directory):
+    # choose local filename
+    base_name = urllib.parse.urlparse(url).path.split('/')[-1]
+    file_name = base_name
+    while True:
+        # add random string to file name to avoid duplicates
+        parts = base_name.split('.', 1)
+        parts[0] = parts[0][:100]  # cut very long file names
+        parts[0] += '_{:08x}'.format(random.randrange(2 ** 32))
+        file_name = '.'.join(parts)
+        file_name = os.path.join(directory, file_name)
+        if not os.path.exists(file_name):
+            break
+    # download the file
+    urllib.request.urlretrieve(url, file_name)
+    return file_name
 
 
 class GraphProtocol(object):
@@ -23,7 +41,7 @@ class GraphProtocol(object):
             GraphProtocol.GRAPH_API_URL,
             version,
             '/'.join(path),
-            urlencode(params))
+            urllib.parse.urlencode(params))
         return GraphProtocol.get0(url)
 
     @staticmethod
@@ -44,23 +62,6 @@ class GraphProtocol(object):
             except (json.JSONDecodeError, KeyError, TypeError) as _:
                 message = r.text
             raise Exception('Error {}: {}'.format(r.status_code, message))
-
-
-# noinspection SpellCheckingInspection
-def download(url, subdir):
-    """
-    Download the file in the URL specified, and return local filename
-    """
-    # munge filename for uniqueness
-    file_name = urlparse(url).path.split('/')[-1]
-    file_name_parts = file_name.split('.')
-    file_name_parts[0] = file_name_parts[0][:100]  # cut very long file names
-    file_name_parts[0] += '_{:08x}'.format(random.randrange(2 ** 32))
-    file_name = '.'.join(file_name_parts)
-    file_name = os.path.join(subdir, file_name)
-    # download
-    urlretrieve(url, file_name)
-    return file_name
 
 
 class FacebookAPI(object):
@@ -123,6 +124,40 @@ class FacebookAPI(object):
         feed = self._get([group_id, 'feed'], params)
         return (PostRef(res) for res in ResultList(feed))
 
+    def download_entire_group(self, group_id):
+        # new posts
+        for post in self.get_posts_from_group(group_id, since='2013-11-01'):
+            post.save_into('posts')
+            post.fetch_comments(self)
+            print(post._updated_time)
+        # old posts
+        for post in self.get_posts_from_group_few_fields(group_id, until='2013-11-10'):
+            if os.path.exists(os.path.join('posts', post._id)):
+                continue
+            post.save_into('posts')
+            post.fetch_comments(self)
+            print(post._updated_time)
+
+    def download_group_since(self, group_id, date):
+        for post in self.get_posts_from_group(group_id, since=date):
+            if os.path.exists(os.path.join('posts', post._id)):
+                print('* ', end='', flush=True)
+                os.system('rm -r posts/{}'.format(post._id))
+            post.save_into('posts')
+            post.fetch_comments(self)
+            print(post._updated_time)
+
+    def get_post_by_id(self, post_id):
+        fields = ['id',  # post object identifier
+                  'type',  # what kind of post this is
+                  'from', 'message',  # author and content of the post
+                  'link',  # if the author created a link post and deleted the original link
+                  'created_time', 'updated_time',  # first & last edit
+                  'attachments'  # photos, file uploads, albums, etc
+                  ]
+        params = {'fields': ','.join(fields)}
+        return PostRef(self._get([post_id], params))
+
     @staticmethod
     def parse_attachments(attachments):
         if attachments is not None:
@@ -154,37 +189,59 @@ class FacebookAPI(object):
 
 
 class PostRef(object):
+    PICKLE_FILE_NAME = 'post.pickle'
 
     def __init__(self, fb_dict):
 
-        self._fbid = fb_dict['id']
-        self._from = fb_dict['from']
-        self._created_time = fb_dict['created_time']
-        self._updated_time = fb_dict['updated_time']
+        if isinstance(fb_dict, dict):
+            # construct from json
+            self._id = fb_dict['id']
+            self._from = fb_dict['from']
+            self._created_time = fb_dict['created_time']
+            self._updated_time = fb_dict['updated_time']
 
-        self._message = fb_dict.get('message', '')
-        if fb_dict.get('type') == 'link':
-            if 'link' in fb_dict and fb_dict['link'] not in self._message:
-                # user typed a link and then deleted it
-                self._message = fb_dict['link'] + '\n\n' + self._message
+            self._message = fb_dict.get('message', '')
+            if fb_dict.get('type') == 'link':
+                if 'link' in fb_dict and fb_dict['link'] not in self._message:
+                    # user typed a link and then deleted it
+                    self._message = fb_dict['link'] + '\n\n' + self._message
 
-        self._pictures = []  # array of urls / file names
-        self._attachments = []  # array of (title, url/filename)s
+            self._pictures = []  # array of urls / file names
+            self._attachments = []  # array of (title, url/filename)s
 
-        for attachment in FacebookAPI.parse_attachments(fb_dict.get('attachments')):
-            if attachment['type'] == 'photo':
-                self._pictures.append(attachment['media']['image']['src'])
-            elif attachment['type'] == 'file_upload':
-                self._attachments.append((attachment['title'], attachment['url']))
+            for attachment in FacebookAPI.parse_attachments(fb_dict.get('attachments')):
+                if attachment['type'] == 'photo':
+                    self._pictures.append(attachment['media']['image']['src'])
+                elif attachment['type'] == 'file_upload':
+                    self._attachments.append((attachment['title'], attachment['url']))
 
-        self._comments = None
-        self._resources_dir = None
+            self._comments = None
+            self._resources_dir = None
+
+        elif isinstance(fb_dict, str):
+            # load from subdirectory
+            self._resources_dir = fb_dict
+            data = pickle.load(open(os.path.join(self._resources_dir, PostRef.PICKLE_FILE_NAME), 'rb'))
+            self._id = data['id']
+            self._from = data['from']
+            self._created_time = data['created_time']
+            self._updated_time = data['updated_time']
+            self._message = data['message']
+            self._pictures = data['pictures']
+            self._attachments = data['attachments']
+            self._comments = data['comments']
+
+    @staticmethod
+    def load_posts_sorted_by_id(path):
+        post_dirs = os.listdir(path)
+        post_dirs.sort(key=lambda x: int(x.split('_')[1]))
+        return [PostRef(os.path.join(path, directory)) for directory in post_dirs]
 
     def is_empty(self):
-        return bool(self._message)
+        return self._message.strip() == ''
 
-    def to_dict(self):
-        return {'id': self._fbid,
+    def _pickle(self):
+        data = {'id': self._id,
                 'from': self._from,
                 'created_time': self._created_time,
                 'updated_time': self._updated_time,
@@ -192,21 +249,41 @@ class PostRef(object):
                 'pictures': self._pictures,
                 'attachments': self._attachments,
                 'comments': self._comments}
-
-    def _pickle(self):
-        pickle.dump(self.to_dict(), open(os.path.join(self._resources_dir, 'post.pickle'), 'wb'))
+        pickle.dump(data, open(os.path.join(self._resources_dir, PostRef.PICKLE_FILE_NAME), 'wb'))
 
     def save_into(self, resources_subdir):
-        self._resources_dir = os.path.join(resources_subdir, self._fbid)
+        self._resources_dir = os.path.join(resources_subdir, self._id)
         os.mkdir(self._resources_dir)
         self._pictures = [download(url, self._resources_dir) for url in self._pictures]
         self._attachments = [(title, download(url, self._resources_dir)) for (title, url) in self._attachments]
         self._pickle()
 
     def fetch_comments(self, api):
-        self._comments = list(api.get_comments(self._fbid, self._resources_dir))
+        self._comments = list(api.get_comments(self._id, self._resources_dir))
         if self._resources_dir:
             self._pickle()
+
+    def get_all_attachments(self):
+        def append_attachments(lst, comments):
+            for comment in comments:
+                if 'attachment' in comment:
+                    lst.append(comment['attachment'])
+                append_attachments(lst, comment['comments'])
+        res = []
+        res += self._pictures
+        res += [location for name, location in self._attachments]
+        append_attachments(res, self._comments or [])
+        return res
+
+    def modify_attachments(self, func):
+        def modify_comments(comments):
+            for comment in comments:
+                if 'attachment' in comment:
+                    comment['attachment'] = func(comment['attachment'])
+                modify_comments(comment['comments'])
+        self._pictures = [func(x) for x in self._pictures]
+        self._attachments = [(x, func(y)) for (x, y) in self._attachments]
+        modify_comments(self._comments or [])
 
 
 class ResultList(object):
